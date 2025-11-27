@@ -1,0 +1,127 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+    Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif;
+  background: #0f1220;
+  color: #e8eaf6;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #1a1e2e;
+  border-bottom: 1px solid #2a2f45;
+}
+header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+header button {
+  background: #5166f0;
+  color: #fff;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 20px;
+}
+section {
+  background: #15182a;
+  border: 1px solid #2a2f45;
+  border-radius: 8px;
+  padding: 16px;
+}
+section h2 {
+  margin-top: 0;
+  font-size: 16px;
+  color: #aeb7ff;
+}
+.suspect-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.suspect {
+  background: #0f1326;
+  border: 1px solid #2a2f45;
+  border-radius: 8px;
+  padding: 12px;
+}
+.suspect .name {
+  font-weight: 600;
+}
+.meter {
+  height: 8px;
+  background: #2a2f45;
+  border-radius: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.meter .fill {
+  height: 100%;
+  background: linear-gradient(90deg, #43cea2, #185a9d);
+  width: 0%;
+  transition: width 0.25s ease;
+}
+.messages {
+  background: #0f1326;
+  border: 1px solid #2a2f45;
+  border-radius: 8px;
+  height: 320px;
+  overflow: auto;
+  padding: 10px;
+}
+.msg {
+  margin: 8px 0;
+}
+.msg .who {
+  color: #9aa5ff;
+  font-weight: 600;
+  margin-right: 6px;
+}
+.msg .content {
+  white-space: pre-wrap;
+}
+.input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.input-row input {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #2a2f45;
+  background: #0f1326;
+  color: #e8eaf6;
+}
+.input-row button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+#askBtn {
+  background: #5166f0;
+  color: #fff;
+}
+.danger {
+  background: #f05151;
+  color: #fff;
+}
+.status { margin-top: 8px; min-height: 20px; color: #d0d4ff; }
+.controls { margin-bottom: 8px; }
+
+footer {
+  padding: 10px 20px;
+  color: #9aa5ff;
+}

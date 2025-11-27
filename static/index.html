@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Detector Game</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Detector Game</h1>
+      <button id="newGameBtn">New Game</button>
+    </header>
+    <main>
+      <section id="scenario">
+        <h2>Case Summary</h2>
+        <p id="summaryText">Click "New Game" to generate a case.</p>
+      </section>
+      <section id="suspects">
+        <h2>Suspects</h2>
+        <div id="suspectList" class="suspect-list"></div>
+      </section>
+      <section id="chat">
+        <h2>Interrogation</h2>
+        <div class="controls">
+          <label for="suspectSelect">Question target:</label>
+          <select id="suspectSelect"></select>
+        </div>
+        <div id="messages" class="messages"></div>
+        <div class="input-row">
+          <input id="questionInput" type="text" placeholder="Ask a question..." />
+          <button id="askBtn">Ask</button>
+          <button id="accuseBtn" class="danger">Accuse</button>
+        </div>
+        <div id="status" class="status"></div>
+      </section>
+    </main>
+    <footer>
+      <small>Built with FastAPI + LangGraph</small>
+    </footer>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
