@@ -6,8 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from .agents import get_llm, suspect_reply, analyze_suspicion
-from .scenario import generate_scenario
+from .llm_strategy import LLMStrategyFactory
 
 
 class GameState(TypedDict):
@@ -27,7 +26,7 @@ class GameState(TypedDict):
 
 class GraphManager:
     def __init__(self) -> None:
-        self.llm = get_llm()
+        self.llm_strategy = LLMStrategyFactory.create_strategy()
         # The graph is stateless; we rebuild per invoke via compiled self.graph
         self.graph = self._build_graph()
 
@@ -51,7 +50,7 @@ class GraphManager:
                 # No target; do nothing
                 return {}
 
-            answer = suspect_reply(self.llm, suspect, scenario, question, state.get("messages", []))
+            answer = self.llm_strategy.suspect_reply(suspect, scenario, question, state.get("messages", []))
             # Append AI message with name metadata
             messages = list(state.get("messages", []))
             messages.append(AIMessage(content=answer, name=suspect.get("name", "Suspect")))
@@ -64,8 +63,7 @@ class GraphManager:
             if not suspect:
                 return {}
             current = float(state.get("suspicion", {}).get(target_id, 0.0))
-            delta = analyze_suspicion(
-                self.llm,
+            delta = self.llm_strategy.analyze_suspicion(
                 {"summary": state.get("summary", "")},
                 suspect,
                 state.get("last_answer", ""),
@@ -100,7 +98,7 @@ class GraphManager:
             # If the user accused someone, skip Q&A and go to accuse check
             if state.get("accused"):
                 return "accuse_check"
-            # Otherwise answer and updatZZe suspicion
+            # Otherwise answer and update suspicion
             return "suspect_answer"
 
         sg.add_node("user_input", user_input_node)
@@ -117,7 +115,7 @@ class GraphManager:
         return sg.compile()
 
     def new_game(self, num_suspects: int = 4) -> Dict[str, Any]:
-        scenario = generate_scenario(self.llm, num_suspects=num_suspects)
+        scenario = self.llm_strategy.generate_scenario(num_suspects=num_suspects)
         suspicion = {s["id"]: 0.0 for s in scenario["suspects"]}
         state: GameState = {
             "messages": [],
