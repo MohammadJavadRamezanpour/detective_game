@@ -100,7 +100,7 @@ class GraphManager:
             # If the user accused someone, skip Q&A and go to accuse check
             if state.get("accused"):
                 return "accuse_check"
-            # Otherwise answer and update suspicion
+            # Otherwise answer and updatZZe suspicion
             return "suspect_answer"
 
         sg.add_node("user_input", user_input_node)
