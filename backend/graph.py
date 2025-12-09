@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
 from .llm_strategy import LLMStrategyFactory
-
+from pprint import pprint
 
 class GameState(TypedDict):
     messages: List[Any]
@@ -132,6 +132,7 @@ class GraphManager:
             "result": None,
         }
         game_id = str(uuid.uuid4())
+
         return {"game_id": game_id, "state": state}
 
     def ask(self, state: GameState, suspect_id: str, question: str) -> GameState:
@@ -142,16 +143,19 @@ class GraphManager:
             "latest_user_question": question,
             "target": suspect_id,
         })
-        out = self.graph.invoke(state)
+        pprint(state)
+        new_state = self.graph.invoke(state)
+       
         # Clear transient fields
-        out["latest_user_question"] = None
-        out["target"] = None
-        return out
+        new_state["latest_user_question"] = None
+        new_state["target"] = None
+        return new_state
 
     def accuse(self, state: GameState, suspect_id: str) -> GameState:
         state.update({"accused": suspect_id})
-        out = self.graph.invoke(state)
-        return out
+        pprint(state)
+        new_state = self.graph.invoke(state)
+        return new_state
 
 
 class SessionStore:

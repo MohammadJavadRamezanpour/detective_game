@@ -67,6 +67,7 @@ def new_game(req: NewGameRequest):
     payload = graph_manager.new_game(num_suspects=req.num_suspects or 4)
     game_id = sessions.create(payload)
     state = payload["state"]
+    
     # Return public-facing info
     return {
         "game_id": game_id,
@@ -84,22 +85,26 @@ def new_game(req: NewGameRequest):
 def ask(req: AskRequest):
     if req.game_id not in sessions.sessions:
         raise HTTPException(status_code=404, detail="Game not found")
+    
     state = sessions.get_state(req.game_id)
     if state.get("game_over"):
         raise HTTPException(status_code=400, detail="Game is over")
-    out = graph_manager.ask(state, req.suspect_id, req.question)
-    sessions.set_state(req.game_id, out)
+    
+    new_state = graph_manager.ask(state, req.suspect_id, req.question)
+    sessions.set_state(req.game_id, new_state)
+    
     # Find the last AI message content for convenience
-    last_ai = next((m for m in reversed(out["messages"]) if getattr(m, "type", "ai") == "ai"), None)
+    last_ai = next((m for m in reversed(new_state["messages"]) if getattr(m, "type", "ai") == "ai"), None)
     answer = getattr(last_ai, "content", "") if last_ai else ""
+    
     return {
         "answer": answer,
-        "suspicion": out["suspicion"],
-        "game_over": out["game_over"],
-        "result": out["result"],
+        "suspicion": new_state["suspicion"],
+        "game_over": new_state["game_over"],
+        "result": new_state["result"],
         "messages": [
             {"role": getattr(m, "type", ""), "name": getattr(m, "name", None), "content": getattr(m, "content", "")}
-            for m in out["messages"]
+            for m in new_state["messages"]
         ],
     }
 
@@ -108,16 +113,19 @@ def ask(req: AskRequest):
 def accuse(req: AccuseRequest):
     if req.game_id not in sessions.sessions:
         raise HTTPException(status_code=404, detail="Game not found")
+
     state = sessions.get_state(req.game_id)
     if state.get("game_over"):
         raise HTTPException(status_code=400, detail="Game is over")
-    out = graph_manager.accuse(state, req.suspect_id)
-    sessions.set_state(req.game_id, out)
+
+    new_state = graph_manager.accuse(state, req.suspect_id)
+    sessions.set_state(req.game_id, new_state)
+    
     return {
-        "game_over": out["game_over"],
-        "result": out["result"],
+        "game_over": new_state["game_over"],
+        "result": new_state["result"],
         "messages": [
             {"role": getattr(m, "type", ""), "name": getattr(m, "name", None), "content": getattr(m, "content", "")}
-            for m in out["messages"]
+            for m in new_state["messages"]
         ],
     }

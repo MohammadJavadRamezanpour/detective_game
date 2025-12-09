@@ -377,7 +377,7 @@ class OpenAILLMStrategy(BaseLLMStrategy):
 class GoogleGeminiLLMStrategy(BaseLLMStrategy):
     """Strategy for Google Gemini models."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-exp"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash-lite"):
         """Initialize Google Gemini strategy.
         
         Args:
@@ -513,6 +513,125 @@ class GoogleGeminiLLMStrategy(BaseLLMStrategy):
         return self.llm.invoke(messages)
 
 
+class DockerLLMStrategy(BaseLLMStrategy):
+    """Strategy for local Docker-based LLMs (e.g., Ollama, vLLM)."""
+
+    def __init__(self, base_url: str = "http://localhost:11434/v1", model: str = "phi3:mini"):
+        """
+        Args:
+            base_url: The base URL for the local model API (OpenAI compatible)
+            model: Local model name (must exist inside the Docker container)
+        """
+        from langchain_openai import ChatOpenAI
+
+        self.base_url = base_url
+        self.model = model
+
+        # No API key for local LLM
+        self.llm = ChatOpenAI(
+            model=self.model,
+            api_key="not-needed",
+            base_url=self.base_url,
+            temperature=0.7
+        )
+
+    # ---- REUSE SAME PROMPTS AS OTHER STRATEGIES -----
+
+    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
+        deterministic = self.llm.bind(temperature=0.0)
+
+        sys = SystemMessage(
+            content=(
+                "You are generating a grounded detective interrogation case for a web game. "
+                "Output STRICT JSON ONLY (no markdown, no commentary). Schema:\n"
+                '{\n  "summary": string,\n  "details": {\n    "crime": string,\n    "location": string,\n    "time_window": string,\n    "clues": [string, ...]\n  },\n  "suspects": [\n    { "id": \'s1\', "name": string, "occupation": string, "bio": string, "alibi": string, "role": \'suspect\'|\'criminal\' }\n  ],\n  "criminal_id": \'sX\'\n}\n'
+                "Choose one suspect as the criminal. Keep facts consistent and plausible."
+            )
+        )
+        hm = HumanMessage(
+            content=(
+                f"Create a case with {num_suspects} suspects. "
+                "Avoid randomness; use consistent narrative and realistic names/occupations. "
+                "Keep bios 1-2 sentences, alibis 1 sentence. Clues should be concrete and checkable."
+            )
+        )
+
+        resp = deterministic.invoke([sys, hm])
+        raw = resp.content.strip()
+        raw = re.sub(r"^```(json)?\n|\n```$", "", raw)
+        data = json.loads(raw)
+
+        # Normalization (same as other strategies)
+        suspects = data["suspects"]
+        for i, s in enumerate(suspects, start=1):
+            s["id"] = f"s{i}"
+            s.setdefault("role", "suspect")
+
+        return {
+            "summary": data["summary"],
+            "details": data["details"],
+            "suspects": suspects,
+            "criminal_id": data.get("criminal_id", "s1")
+        }
+
+    def suspect_reply(self, suspect, scenario, question, chat_history):
+        role = suspect.get("role", "suspect")
+        persona = suspect.get("bio", "")
+        alibi = suspect.get("alibi", "")
+        name = suspect.get("name", "Suspect")
+
+        system_prompt = (
+            "You are role-playing as a suspect in an interrogation game. "
+            "Stay in character, use first person, and defend yourself. "
+            "Keep responses concise (2–5 sentences). "
+            f"Your name: {name}. Persona: {persona}. Alibi: {alibi}. "
+            f"Case summary: {scenario.get('summary','')}."
+        )
+
+        if role == "criminal":
+            system_prompt += " As the criminal, be evasive but not obviously contradictory."
+        else:
+            system_prompt += " As an innocent suspect, be consistent and cooperative."
+
+        resp = self.llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=question)
+        ])
+
+        return resp.content
+
+    def analyze_suspicion(self, scenario, suspect, last_answer, last_question, current_score):
+        sys = SystemMessage(
+            content=(
+                "Score the suspicion of the suspect's answer. "
+                "Return ONLY a float delta between -0.5 and 0.8."
+            )
+        )
+
+        hm = HumanMessage(
+            content=(
+                f"Question: {last_question}\n"
+                f"Answer: {last_answer}\n"
+                f"Persona: {suspect.get('bio','')}\n"
+                f"Scenario: {scenario.get('summary','')}\n"
+                f"Current: {current_score}"
+            )
+        )
+
+        try:
+            resp = self.llm.invoke([sys, hm])
+            txt = resp.content.strip()
+            m = re.search(r"-?\d+(\.\d+)?", txt)
+            if m:
+                return max(-0.5, min(0.8, float(m.group())))
+        except Exception:
+            pass
+        return 0.0
+
+    def invoke(self, messages: List[Any]):
+        return self.llm.invoke(messages)
+
+
 class MockLLMStrategy(BaseLLMStrategy):
     """Mock LLM strategy for testing without API keys."""
 
@@ -599,6 +718,10 @@ class MockLLMStrategy(BaseLLMStrategy):
 
 class LLMStrategyFactory:
     """Factory class to create appropriate LLM strategy based on available API keys."""
+
+    @staticmethod
+    def _get_local_llm_url() -> str:
+        return os.environ.get("LOCAL_LLM_BASE_URL", "")
 
     @staticmethod
     def _get_qwen_key() -> str:
