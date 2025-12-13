@@ -37,8 +37,8 @@ In Detector Game, you play as a detective investigating a crime scene. The AI ge
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/detector-game.git
-   cd detector-game/src
+   git clone https://github.com/MohammadJavadRamezanpour/detective_game.git detectivegame
+   cd detectivegame
    ```
 
 2. **Create a virtual environment**
