@@ -1,43 +1,67 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Detector Game</title>
-    <link rel="stylesheet" href="/static/style.css" />
-  </head>
-  <body>
-    <header>
-      <h1>Detector Game</h1>
-      <button id="newGameBtn">New Game</button>
-    </header>
-    <main>
-      <section id="scenario">
-        <h2>Case Summary</h2>
-        <p id="summaryText">Click "New Game" to generate a case.</p>
-      </section>
-      <section id="suspects">
-        <h2>Suspects</h2>
-        <div id="suspectList" class="suspect-list"></div>
-      </section>
-      <section id="chat">
-        <h2>Interrogation</h2>
-        <div class="controls">
-          <label for="suspectSelect">Question target:</label>
-          <select id="suspectSelect"></select>
-        </div>
-        <div id="messages" class="messages"></div>
-        <div class="input-row">
-          <input id="questionInput" type="text" placeholder="Ask a question..." />
-          <button id="askBtn">Ask</button>
-          <button id="accuseBtn" class="danger">Accuse</button>
-        </div>
-        <div id="status" class="status"></div>
-      </section>
-    </main>
-    <footer>
-      <small>Built with FastAPI + LangGraph</small>
-    </footer>
-    <script src="/static/app.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🕵️ Detector Game</title>
+
+  <!-- Google Font for game feel -->
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+
+  <!-- Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🕵️‍♀️ Detector Game</h1>
+    <button id="newGameBtn">
+      <i class="fa-solid fa-rotate"></i> New Case
+    </button>
+  </header>
+
+  <main>
+    <section id="scenario">
+      <h2>📂 Case Summary</h2>
+      <p id="summaryText" class="typewriter">
+        Click "New Case" to begin…
+      </p>
+    </section>
+
+    <section id="suspects">
+      <h2>🧍‍♂️ Suspects</h2>
+      <div id="suspectList" class="suspect-list"></div>
+    </section>
+
+    <section id="chat">
+      <h2>💬 Interrogation Room</h2>
+
+      <div class="controls">
+        <label for="suspectSelect">🎯 Target</label>
+        <select id="suspectSelect"></select>
+      </div>
+
+      <div id="messages" class="messages"></div>
+
+      <div class="input-row">
+        <input id="questionInput" type="text" placeholder="Ask something clever…" />
+        <button id="askBtn">
+          <i class="fa-solid fa-comment-dots"></i>
+        </button>
+        <button id="accuseBtn" class="danger">
+          <i class="fa-solid fa-gavel"></i>
+        </button>
+      </div>
+
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <footer>
+    <small>🎮 Built with FastAPI + LangGraph</small>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
 </html>

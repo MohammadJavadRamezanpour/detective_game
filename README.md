@@ -2,6 +2,9 @@
 
 An AI-powered detective game where you interrogate suspects to uncover the criminal. Built with **FastAPI**, **LangGraph**, and modern LLM providers.
 
+
+![Game Screenshot](/static/images/game.png)
+
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-purple.svg)
