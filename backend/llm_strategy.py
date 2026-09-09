@@ -1,10 +1,4 @@
-"""LLM Strategy Pattern Implementation
-
-This module implements the Strategy design pattern for LLM operations,
-allowing easy addition of multiple LLM providers while encapsulating all
-LLM-related logic including scenario generation, suspect replies, and
-suspicion analysis.
-"""
+"""Provider-independent LLM operations for the CaseGraph workflow."""
 
 from __future__ import annotations
 
@@ -12,777 +6,341 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from .models import CaseScenario, EvidenceAnalysis
+
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
-except ImportError:
+except ImportError:  # pragma: no cover - provider is optional
     ChatGoogleGenerativeAI = None
 
 
+def _json_from_content(content: Any) -> dict[str, Any]:
+    """Extract a JSON object from provider text as a compatibility fallback."""
+    raw = content if isinstance(content, str) else str(content)
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
+    return json.loads(raw)
+
+
 class BaseLLMStrategy(ABC):
-    """Abstract base class defining the interface for all LLM strategies."""
+    """The narrow interface consumed by graph nodes."""
 
     @abstractmethod
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        """Generate a deterministic scenario using the LLM.
-        
-        Args:
-            num_suspects: Number of suspects to generate
-            
-        Returns:
-            Dictionary containing scenario data with keys:
-            - summary: Brief case summary
-            - details: Crime details (crime, location, time_window, clues)
-            - suspects: List of suspect dictionaries
-            - criminal_id: ID of the criminal suspect
-        """
-        pass
+    def generate_scenario(self, num_suspects: int = 4) -> CaseScenario:
+        raise NotImplementedError
 
     @abstractmethod
     def suspect_reply(
         self,
-        suspect: Dict[str, Any],
-        scenario: Dict[str, Any],
+        suspect: dict[str, Any],
+        scenario: dict[str, Any],
         question: str,
-        chat_history: List[Any],
+        chat_history: list[dict[str, str]],
     ) -> str:
-        """Generate a suspect's reply guided by persona and scenario.
-        
-        Args:
-            suspect: Suspect data (id, name, bio, alibi, role)
-            scenario: Scenario data (summary, details)
-            question: Player's question
-            chat_history: Previous conversation messages
-            
-        Returns:
-            Suspect's response as a string
-        """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def analyze_suspicion(
+    def analyze_evidence(
         self,
-        scenario: Dict[str, Any],
-        suspect: Dict[str, Any],
+        scenario: dict[str, Any],
+        suspect: dict[str, Any],
         last_answer: str,
         last_question: str,
+        chat_history: list[dict[str, str]],
         current_score: float,
-    ) -> float:
-        """Analyze suspicion level based on the latest exchange.
-        
-        Args:
-            scenario: Scenario data
-            suspect: Suspect data
-            last_answer: Suspect's last answer
-            last_question: Player's last question
-            current_score: Current suspicion score
-            
-        Returns:
-            Delta to adjust suspicion score (typically -0.5 to 0.8)
-        """
-        pass
-
-    @abstractmethod
-    def invoke(self, messages: List[Any]) -> Any:
-        """Low-level LLM invocation for backward compatibility.
-        
-        Args:
-            messages: List of messages to send to the LLM
-            
-        Returns:
-            LLM response object
-        """
-        pass
+    ) -> EvidenceAnalysis:
+        raise NotImplementedError
 
 
-class QwenLLMStrategy(BaseLLMStrategy):
-    """Strategy for Qwen/DashScope LLM."""
+class ChatModelStrategy(BaseLLMStrategy):
+    """Shared structured-output behavior for LangChain chat models."""
 
-    def __init__(self, api_key: str, base_url: str = None, model: str = None):
-        """Initialize Qwen strategy.
-        
-        Args:
-            api_key: Qwen/DashScope API key
-            base_url: Optional base URL for API endpoint
-            model: Optional model name (default: qwen-plus)
-        """
-        from langchain_openai import ChatOpenAI
-
-        self.base_url = base_url or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        self.model = model or "qwen-plus"
-        self.llm = ChatOpenAI(
-            api_key=api_key,
-            base_url=self.base_url,
-            model=self.model,
-            temperature=0.7
-        )
-
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        """Generate scenario using Qwen LLM."""
-        # Use deterministic generation for planning
-        deterministic = self.llm.bind(temperature=0.0)
-
-        sys = SystemMessage(
-            content=(
-                "You are generating a grounded detective interrogation case for a web game. "
-                "Output STRICT JSON ONLY (no markdown, no commentary). Schema:\n"
-                '{\n  "summary": string,\n  "details": {\n    "crime": string,\n    "location": string,\n    "time_window": string,\n    "clues": [string, ...]\n  },\n  "suspects": [\n    { "id": \'s1\', "name": string, "occupation": string, "bio": string, "alibi": string, "role": \'suspect\'|\'criminal\' }\n  ],\n  "criminal_id": \'sX\'\n}\n'
-                "Choose one suspect as the criminal. Keep facts consistent and plausible."
-            )
-        )
-        hm = HumanMessage(
-            content=(
-                f"Create a case with {num_suspects} suspects. "
-                "Avoid randomness; use consistent narrative and realistic names/occupations. "
-                "Keep bios 1-2 sentences, alibis 1 sentence. Clues should be concrete and checkable."
-            )
-        )
-
-        resp = deterministic.invoke([sys, hm])
-        raw = getattr(resp, "content", "") or str(resp)
-        # Strip code fences if present
-        raw = re.sub(r"^```(json)?\n|\n```$", "", raw.strip())
-        data = json.loads(raw)
-
-        suspects: List[Dict[str, Any]] = data.get("suspects", [])
-        if not suspects or len(suspects) != num_suspects:
-            raise ValueError("invalid suspects count")
-        for i, s in enumerate(suspects, start=1):
-            s["id"] = f"s{i}"
-            s.setdefault("role", "suspect")
-        criminal_id = data.get("criminal_id") or next((s["id"] for s in suspects if s.get("role") == "criminal"), "s1")
-        if criminal_id not in {s["id"] for s in suspects}:
-            criminal_id = "s1"
-
-        return {
-            "summary": data.get("summary", ""),
-            "details": data.get("details", {}),
-            "suspects": suspects,
-            "criminal_id": criminal_id,
-        }
-
-    def suspect_reply(
-        self,
-        suspect: Dict[str, Any],
-        scenario: Dict[str, Any],
-        question: str,
-        chat_history: List[Any],
-    ) -> str:
-        """Generate suspect reply using Qwen LLM."""
-        role = suspect.get("role", "suspect")
-        persona = suspect.get("bio", "")
-        alibi = suspect.get("alibi", "")
-        name = suspect.get("name", "Suspect")
-        crime_summary = scenario.get("summary", "")
-        crime_details = scenario.get("details", {})
-
-        system_prompt = (
-            "You are role-playing as a suspect in an interrogation game. "
-            "Stay in character, use first person, and defend yourself. "
-            "Do NOT confess unless the evidence is overwhelming and directly proves guilt. "
-            "Keep responses concise (2-5 sentences). "
-            f"Your name is {name}. Persona: {persona}. Alibi: {alibi}. "
-            f"Case: {crime_summary}. Relevant facts: {crime_details}. "
-            + (
-                "As the criminal, be evasive, plausible, and deflect; avoid obvious contradictions. "
-                if role == "criminal"
-                else "As an innocent suspect, be cooperative and consistent. "
-            )
-        )
-
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=question)]
-        resp = self.llm.invoke(messages)
-        return getattr(resp, "content", str(resp))
-
-    def analyze_suspicion(
-        self,
-        scenario: Dict[str, Any],
-        suspect: Dict[str, Any],
-        last_answer: str,
-        last_question: str,
-        current_score: float,
-    ) -> float:
-        """Analyze suspicion using Qwen LLM."""
-        sys = SystemMessage(
-            content=(
-                "You are scoring interrogation answers for suspicion. "
-                "Return ONLY a single float delta in the range [-0.5, 0.8] based on whether the answer increases suspicion. "
-                "Small values are preferred; 0.0 if neutral."
-            )
-        )
-        hm = HumanMessage(
-            content=(
-                f"Question: {last_question}\nAnswer: {last_answer}\n"
-                f"Suspect persona: {suspect.get('bio','')}\n"
-                f"Scenario summary: {scenario.get('summary','')}\n"
-                f"Current suspicion: {current_score:.2f}"
-            )
-        )
-        try:
-            resp = self.llm.invoke([sys, hm])
-            text = getattr(resp, "content", "0.0").strip()
-            # Extract the first numeric value
-            m = re.search(r"[-+]?\d*\.\d+|[-+]?\d+", text)
-            if m:
-                val = float(m.group(0))
-                return float(max(min(val, 0.8), -0.5))
-        except Exception:
-            pass
-        return 0.0
-
-    def invoke(self, messages: List[Any]) -> Any:
-        """Invoke Qwen LLM directly."""
-        return self.llm.invoke(messages)
-
-
-class OpenAILLMStrategy(BaseLLMStrategy):
-    """Strategy for OpenAI GPT models."""
-
-    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini"):
-        """Initialize OpenAI strategy.
-        
-        Args:
-            api_key: Optional OpenAI API key (uses env var if not provided)
-            model: Model name (default: gpt-4o-mini)
-        """
-        from langchain_openai import ChatOpenAI
-
+    def __init__(self, llm: Any, model: str):
+        self.llm = llm
         self.model = model
-        if api_key:
-            self.llm = ChatOpenAI(api_key=api_key, model=model, temperature=0.7)
-        else:
-            self.llm = ChatOpenAI(model=model, temperature=0.7)
 
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        """Generate scenario using OpenAI LLM."""
-        # Use deterministic generation for planning
-        deterministic = self.llm.bind(temperature=0.0)
+    def _structured(self, schema: type, messages: list[Any], llm: Any | None = None) -> Any:
+        """Prefer native structured output, then validate a JSON fallback."""
+        model = llm or self.llm
+        try:
+            result = model.with_structured_output(schema).invoke(messages)
+            return result if isinstance(result, schema) else schema.model_validate(result)
+        except Exception:
+            response = model.invoke(messages)
+            return schema.model_validate(_json_from_content(response.content))
 
-        sys = SystemMessage(
+    def generate_scenario(self, num_suspects: int = 4) -> CaseScenario:
+        system = SystemMessage(
             content=(
-                "You are generating a grounded detective interrogation case for a web game. "
-                "Output STRICT JSON ONLY (no markdown, no commentary). Schema:\n"
-                '{\n  "summary": string,\n  "details": {\n    "crime": string,\n    "location": string,\n    "time_window": string,\n    "clues": [string, ...]\n  },\n  "suspects": [\n    { "id": \'s1\', "name": string, "occupation": string, "bio": string, "alibi": string, "role": \'suspect\'|\'criminal\' }\n  ],\n  "criminal_id": \'sX\'\n}\n'
-                "Choose one suspect as the criminal. Keep facts consistent and plausible."
+                "Design a fair, internally consistent detective case for an interrogation game. "
+                "Every clue must be concrete and useful. Exactly one suspect is the criminal, "
+                "criminal_id must match that suspect's id, and IDs must be sequential s1, s2, etc. "
+                "Do not reveal guilt in the public summary, bios, alibis, or clues."
             )
         )
-        hm = HumanMessage(
+        prompt = HumanMessage(
             content=(
-                f"Create a case with {num_suspects} suspects. "
-                "Avoid randomness; use consistent narrative and realistic names/occupations. "
-                "Keep bios 1-2 sentences, alibis 1 sentence. Clues should be concrete and checkable."
+                f"Create one case with exactly {num_suspects} suspects. Include 3-6 clues, "
+                "distinct motives, checkable alibis, and enough evidence for a player to reason "
+                "toward one solution. Keep the summary under 120 words."
             )
         )
-
-        resp = deterministic.invoke([sys, hm])
-        raw = getattr(resp, "content", "") or str(resp)
-        # Strip code fences if present
-        raw = re.sub(r"^```(json)?\n|\n```$", "", raw.strip())
-        data = json.loads(raw)
-
-        suspects: List[Dict[str, Any]] = data.get("suspects", [])
-        if not suspects or len(suspects) != num_suspects:
-            raise ValueError("invalid suspects count")
-        for i, s in enumerate(suspects, start=1):
-            s["id"] = f"s{i}"
-            s.setdefault("role", "suspect")
-        criminal_id = data.get("criminal_id") or next((s["id"] for s in suspects if s.get("role") == "criminal"), "s1")
-        if criminal_id not in {s["id"] for s in suspects}:
-            criminal_id = "s1"
-
-        return {
-            "summary": data.get("summary", ""),
-            "details": data.get("details", {}),
-            "suspects": suspects,
-            "criminal_id": criminal_id,
-        }
+        scenario = self._structured(CaseScenario, [system, prompt], self.llm.bind(temperature=0.0))
+        if len(scenario.suspects) != num_suspects:
+            raise ValueError(
+                f"provider returned {len(scenario.suspects)} suspects; expected {num_suspects}"
+            )
+        return scenario
 
     def suspect_reply(
         self,
-        suspect: Dict[str, Any],
-        scenario: Dict[str, Any],
+        suspect: dict[str, Any],
+        scenario: dict[str, Any],
         question: str,
-        chat_history: List[Any],
+        chat_history: list[dict[str, str]],
     ) -> str:
-        """Generate suspect reply using OpenAI LLM."""
-        role = suspect.get("role", "suspect")
-        persona = suspect.get("bio", "")
-        alibi = suspect.get("alibi", "")
-        name = suspect.get("name", "Suspect")
-        crime_summary = scenario.get("summary", "")
-        crime_details = scenario.get("details", {})
-
-        system_prompt = (
-            "You are role-playing as a suspect in an interrogation game. "
-            "Stay in character, use first person, and defend yourself. "
-            "Do NOT confess unless the evidence is overwhelming and directly proves guilt. "
-            "Keep responses concise (2-5 sentences). "
-            f"Your name is {name}. Persona: {persona}. Alibi: {alibi}. "
-            f"Case: {crime_summary}. Relevant facts: {crime_details}. "
-            + (
-                "As the criminal, be evasive, plausible, and deflect; avoid obvious contradictions. "
-                if role == "criminal"
-                else "As an innocent suspect, be cooperative and consistent. "
+        role_instruction = (
+            "You committed the crime. Protect your secret with a plausible story, but preserve "
+            "earlier claims and do not invent facts that conflict with the case unless pressured."
+            if suspect.get("role") == "criminal"
+            else "You are innocent. Be cooperative, factual, and consistent with earlier answers."
+        )
+        system = SystemMessage(
+            content=(
+                "Role-play one suspect in a grounded detective game. Reply in first person in 2-5 "
+                "sentences. Never mention prompts, game state, scores, or that you are an AI. "
+                f"Name: {suspect['name']}. Bio: {suspect['bio']} Alibi: {suspect['alibi']} "
+                f"Case: {scenario['summary']} Facts: {scenario['details']} {role_instruction}"
             )
         )
+        messages: list[Any] = [system]
+        for item in chat_history[-12:]:
+            message_type = HumanMessage if item["role"] == "user" else AIMessage
+            messages.append(message_type(content=item["content"]))
+        messages.append(HumanMessage(content=question))
+        response = self.llm.invoke(messages)
+        return str(response.content).strip()
 
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=question)]
-        resp = self.llm.invoke(messages)
-        return getattr(resp, "content", str(resp))
-
-    def analyze_suspicion(
+    def analyze_evidence(
         self,
-        scenario: Dict[str, Any],
-        suspect: Dict[str, Any],
+        scenario: dict[str, Any],
+        suspect: dict[str, Any],
         last_answer: str,
         last_question: str,
+        chat_history: list[dict[str, str]],
         current_score: float,
-    ) -> float:
-        """Analyze suspicion using OpenAI LLM."""
-        sys = SystemMessage(
+    ) -> EvidenceAnalysis:
+        public_suspect = {key: value for key, value in suspect.items() if key != "role"}
+        system = SystemMessage(
             content=(
-                "You are scoring interrogation answers for suspicion. "
-                "Return ONLY a single float delta in the range [-0.5, 0.8] based on whether the answer increases suspicion. "
-                "Small values are preferred; 0.0 if neutral."
+                "You are a conservative evidence analyst for a detective game. Compare only the "
+                "latest answer with the canonical case, the suspect's alibi, and their earlier "
+                "statements. Do not infer guilt from tone. Flag a contradiction only when two "
+                "specific claims cannot both be true. Keep the rationale safe to show the player. "
+                "A relevant clue must be copied exactly from the provided clues."
             )
         )
-        hm = HumanMessage(
-            content=(
-                f"Question: {last_question}\nAnswer: {last_answer}\n"
-                f"Suspect persona: {suspect.get('bio','')}\n"
-                f"Scenario summary: {scenario.get('summary','')}\n"
-                f"Current suspicion: {current_score:.2f}"
+        prompt = HumanMessage(
+            content=json.dumps(
+                {
+                    "case": scenario,
+                    "suspect": public_suspect,
+                    "earlier_history": chat_history[:-2][-10:],
+                    "latest_question": last_question,
+                    "latest_answer": last_answer,
+                    "current_suspicion": current_score,
+                },
+                ensure_ascii=False,
             )
         )
         try:
-            resp = self.llm.invoke([sys, hm])
-            text = getattr(resp, "content", "0.0").strip()
-            # Extract the first numeric value
-            m = re.search(r"[-+]?\d*\.\d+|[-+]?\d+", text)
-            if m:
-                val = float(m.group(0))
-                return float(max(min(val, 0.8), -0.5))
+            return self._structured(EvidenceAnalysis, [system, prompt])
         except Exception:
-            pass
-        return 0.0
-
-    def invoke(self, messages: List[Any]) -> Any:
-        """Invoke OpenAI LLM directly."""
-        return self.llm.invoke(messages)
+            return EvidenceAnalysis(
+                suspicion_delta=0.0,
+                rationale="No reliable evidence signal was extracted from this answer.",
+            )
 
 
-class GoogleGeminiLLMStrategy(BaseLLMStrategy):
-    """Strategy for Google Gemini models."""
+class OpenAILLMStrategy(ChatModelStrategy):
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini"):
+        from langchain_openai import ChatOpenAI
 
+        super().__init__(
+            ChatOpenAI(api_key=api_key, model=model, temperature=0.7, timeout=30, max_retries=2),
+            model,
+        )
+
+
+class QwenLLMStrategy(ChatModelStrategy):
+    def __init__(self, api_key: str, base_url: str | None = None, model: str | None = None):
+        from langchain_openai import ChatOpenAI
+
+        selected_model = model or "qwen-plus"
+        super().__init__(
+            ChatOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                model=selected_model,
+                temperature=0.7,
+                timeout=30,
+                max_retries=2,
+            ),
+            selected_model,
+        )
+
+
+class GoogleGeminiLLMStrategy(ChatModelStrategy):
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash-lite"):
-        """Initialize Google Gemini strategy.
-        
-        Args:
-            api_key: Google API key
-            model: Model name (default: gemini-2.0-flash-exp)
-        """
-        if not ChatGoogleGenerativeAI:
-            raise ImportError("langchain-google-genai package not installed")
-
-        self.model = model
-        self.llm = ChatGoogleGenerativeAI(
-            model=model,
-            google_api_key=api_key,
-            temperature=0.7,
-            convert_system_message_to_human=True
+        if ChatGoogleGenerativeAI is None:
+            raise ImportError("langchain-google-genai is not installed")
+        super().__init__(
+            ChatGoogleGenerativeAI(
+                model=model,
+                google_api_key=api_key,
+                temperature=0.7,
+                timeout=30,
+                max_retries=2,
+            ),
+            model,
         )
 
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        """Generate scenario using Google Gemini LLM."""
-        # Use deterministic generation for planning
-        deterministic = self.llm.bind(temperature=0.0)
 
-        sys = SystemMessage(
-            content=(
-                "You are generating a grounded detective interrogation case for a web game. "
-                "Output STRICT JSON ONLY (no markdown, no commentary). Schema:\n"
-                '{\n  "summary": string,\n  "details": {\n    "crime": string,\n    "location": string,\n    "time_window": string,\n    "clues": [string, ...]\n  },\n  "suspects": [\n    { "id": \'s1\', "name": string, "occupation": string, "bio": string, "alibi": string, "role": \'suspect\'|\'criminal\' }\n  ],\n  "criminal_id": \'sX\'\n}\n'
-                "Choose one suspect as the criminal. Keep facts consistent and plausible."
-            )
-        )
-        hm = HumanMessage(
-            content=(
-                f"Create a case with {num_suspects} suspects. "
-                "Avoid randomness; use consistent narrative and realistic names/occupations. "
-                "Keep bios 1-2 sentences, alibis 1 sentence. Clues should be concrete and checkable."
-            )
-        )
-
-        resp = deterministic.invoke([sys, hm])
-        raw = getattr(resp, "content", "") or str(resp)
-        # Strip code fences if present
-        raw = re.sub(r"^```(json)?\n|\n```$", "", raw.strip())
-        data = json.loads(raw)
-
-        suspects: List[Dict[str, Any]] = data.get("suspects", [])
-        if not suspects or len(suspects) != num_suspects:
-            raise ValueError("invalid suspects count")
-        for i, s in enumerate(suspects, start=1):
-            s["id"] = f"s{i}"
-            s.setdefault("role", "suspect")
-        criminal_id = data.get("criminal_id") or next((s["id"] for s in suspects if s.get("role") == "criminal"), "s1")
-        if criminal_id not in {s["id"] for s in suspects}:
-            criminal_id = "s1"
-
-        return {
-            "summary": data.get("summary", ""),
-            "details": data.get("details", {}),
-            "suspects": suspects,
-            "criminal_id": criminal_id,
-        }
-
-    def suspect_reply(
-        self,
-        suspect: Dict[str, Any],
-        scenario: Dict[str, Any],
-        question: str,
-        chat_history: List[Any],
-    ) -> str:
-        """Generate suspect reply using Google Gemini LLM."""
-        role = suspect.get("role", "suspect")
-        persona = suspect.get("bio", "")
-        alibi = suspect.get("alibi", "")
-        name = suspect.get("name", "Suspect")
-        crime_summary = scenario.get("summary", "")
-        crime_details = scenario.get("details", {})
-
-        system_prompt = (
-            "You are role-playing as a suspect in an interrogation game. "
-            "Stay in character, use first person, and defend yourself. "
-            "Do NOT confess unless the evidence is overwhelming and directly proves guilt. "
-            "Keep responses concise (2-5 sentences). "
-            f"Your name is {name}. Persona: {persona}. Alibi: {alibi}. "
-            f"Case: {crime_summary}. Relevant facts: {crime_details}. "
-            + (
-                "As the criminal, be evasive, plausible, and deflect; avoid obvious contradictions. "
-                if role == "criminal"
-                else "As an innocent suspect, be cooperative and consistent. "
-            )
-        )
-
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=question)]
-        resp = self.llm.invoke(messages)
-        return getattr(resp, "content", str(resp))
-
-    def analyze_suspicion(
-        self,
-        scenario: Dict[str, Any],
-        suspect: Dict[str, Any],
-        last_answer: str,
-        last_question: str,
-        current_score: float,
-    ) -> float:
-        """Analyze suspicion using Google Gemini LLM."""
-        sys = SystemMessage(
-            content=(
-                "You are scoring interrogation answers for suspicion. "
-                "Return ONLY a single float delta in the range [-0.5, 0.8] based on whether the answer increases suspicion. "
-                "Small values are preferred; 0.0 if neutral."
-            )
-        )
-        hm = HumanMessage(
-            content=(
-                f"Question: {last_question}\nAnswer: {last_answer}\n"
-                f"Suspect persona: {suspect.get('bio','')}\n"
-                f"Scenario summary: {scenario.get('summary','')}\n"
-                f"Current suspicion: {current_score:.2f}"
-            )
-        )
-        try:
-            resp = self.llm.invoke([sys, hm])
-            text = getattr(resp, "content", "0.0").strip()
-            # Extract the first numeric value
-            m = re.search(r"[-+]?\d*\.\d+|[-+]?\d+", text)
-            if m:
-                val = float(m.group(0))
-                return float(max(min(val, 0.8), -0.5))
-        except Exception:
-            pass
-        return 0.0
-
-    def invoke(self, messages: List[Any]) -> Any:
-        """Invoke Google Gemini LLM directly."""
-        return self.llm.invoke(messages)
-
-
-class DockerLLMStrategy(BaseLLMStrategy):
-    """Strategy for local Docker-based LLMs (e.g., Ollama, vLLM)."""
-
-    def __init__(self, base_url: str = "http://localhost:11434/v1", model: str = "phi3:mini"):
-        """
-        Args:
-            base_url: The base URL for the local model API (OpenAI compatible)
-            model: Local model name (must exist inside the Docker container)
-        """
+class DockerLLMStrategy(ChatModelStrategy):
+    def __init__(self, base_url: str, model: str = "phi3:mini"):
         from langchain_openai import ChatOpenAI
 
-        self.base_url = base_url
-        self.model = model
-
-        # No API key for local LLM
-        self.llm = ChatOpenAI(
-            model=self.model,
-            api_key="not-needed",
-            base_url=self.base_url,
-            temperature=0.7
+        super().__init__(
+            ChatOpenAI(
+                model=model,
+                api_key="local-model",
+                base_url=base_url,
+                temperature=0.7,
+                timeout=60,
+                max_retries=1,
+            ),
+            model,
         )
-
-    # ---- REUSE SAME PROMPTS AS OTHER STRATEGIES -----
-
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        deterministic = self.llm.bind(temperature=0.0)
-
-        sys = SystemMessage(
-            content=(
-                "You are generating a grounded detective interrogation case for a web game. "
-                "Output STRICT JSON ONLY (no markdown, no commentary). Schema:\n"
-                '{\n  "summary": string,\n  "details": {\n    "crime": string,\n    "location": string,\n    "time_window": string,\n    "clues": [string, ...]\n  },\n  "suspects": [\n    { "id": \'s1\', "name": string, "occupation": string, "bio": string, "alibi": string, "role": \'suspect\'|\'criminal\' }\n  ],\n  "criminal_id": \'sX\'\n}\n'
-                "Choose one suspect as the criminal. Keep facts consistent and plausible."
-            )
-        )
-        hm = HumanMessage(
-            content=(
-                f"Create a case with {num_suspects} suspects. "
-                "Avoid randomness; use consistent narrative and realistic names/occupations. "
-                "Keep bios 1-2 sentences, alibis 1 sentence. Clues should be concrete and checkable."
-            )
-        )
-
-        resp = deterministic.invoke([sys, hm])
-        raw = resp.content.strip()
-        raw = re.sub(r"^```(json)?\n|\n```$", "", raw)
-        data = json.loads(raw)
-
-        # Normalization (same as other strategies)
-        suspects = data["suspects"]
-        for i, s in enumerate(suspects, start=1):
-            s["id"] = f"s{i}"
-            s.setdefault("role", "suspect")
-
-        return {
-            "summary": data["summary"],
-            "details": data["details"],
-            "suspects": suspects,
-            "criminal_id": data.get("criminal_id", "s1")
-        }
-
-    def suspect_reply(self, suspect, scenario, question, chat_history):
-        role = suspect.get("role", "suspect")
-        persona = suspect.get("bio", "")
-        alibi = suspect.get("alibi", "")
-        name = suspect.get("name", "Suspect")
-
-        system_prompt = (
-            "You are role-playing as a suspect in an interrogation game. "
-            "Stay in character, use first person, and defend yourself. "
-            "Keep responses concise (2–5 sentences). "
-            f"Your name: {name}. Persona: {persona}. Alibi: {alibi}. "
-            f"Case summary: {scenario.get('summary','')}."
-        )
-
-        if role == "criminal":
-            system_prompt += " As the criminal, be evasive but not obviously contradictory."
-        else:
-            system_prompt += " As an innocent suspect, be consistent and cooperative."
-
-        resp = self.llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=question)
-        ])
-
-        return resp.content
-
-    def analyze_suspicion(self, scenario, suspect, last_answer, last_question, current_score):
-        sys = SystemMessage(
-            content=(
-                "Score the suspicion of the suspect's answer. "
-                "Return ONLY a float delta between -0.5 and 0.8."
-            )
-        )
-
-        hm = HumanMessage(
-            content=(
-                f"Question: {last_question}\n"
-                f"Answer: {last_answer}\n"
-                f"Persona: {suspect.get('bio','')}\n"
-                f"Scenario: {scenario.get('summary','')}\n"
-                f"Current: {current_score}"
-            )
-        )
-
-        try:
-            resp = self.llm.invoke([sys, hm])
-            txt = resp.content.strip()
-            m = re.search(r"-?\d+(\.\d+)?", txt)
-            if m:
-                return max(-0.5, min(0.8, float(m.group())))
-        except Exception:
-            pass
-        return 0.0
-
-    def invoke(self, messages: List[Any]):
-        return self.llm.invoke(messages)
 
 
 class MockLLMStrategy(BaseLLMStrategy):
-    """Mock LLM strategy for testing without API keys."""
+    """Deterministic offline mode used by tests and zero-key demos."""
 
-    def generate_scenario(self, num_suspects: int = 4) -> Dict[str, Any]:
-        """Generate a mock scenario."""
+    def generate_scenario(self, num_suspects: int = 4) -> CaseScenario:
+        names = [
+            ("Mara Voss", "Museum curator"),
+            ("Elias Reed", "Security contractor"),
+            ("Nina Park", "Investigative journalist"),
+            ("Theo Grant", "Art restorer"),
+            ("Iris Bell", "Gallery accountant"),
+            ("Jonas Vale", "Private collector"),
+        ]
         suspects = []
-        for i in range(1, num_suspects + 1):
-            suspects.append({
-                "id": f"s{i}",
-                "name": f"Suspect {i}",
-                "occupation": f"Occupation {i}",
-                "bio": f"This is suspect {i}'s background story.",
-                "alibi": f"I was at location {i} during the crime.",
-                "role": "criminal" if i == 1 else "suspect"
-            })
-
-        return {
-            "summary": "A mock crime has occurred for testing purposes.",
-            "details": {
-                "crime": "Mock theft",
-                "location": "Mock location",
-                "time_window": "Mock time",
-                "clues": ["Mock clue 1", "Mock clue 2"]
-            },
-            "suspects": suspects,
-            "criminal_id": "s1"
-        }
+        for index, (name, occupation) in enumerate(names[:num_suspects], start=1):
+            suspects.append(
+                {
+                    "id": f"s{index}",
+                    "name": name,
+                    "occupation": occupation,
+                    "bio": (
+                        f"{name} had authorized access to the gallery during the exhibition setup."
+                    ),
+                    "alibi": f"{name} says they left the gallery before 9:00 PM.",
+                    "role": "criminal" if index == 2 else "suspect",
+                }
+            )
+        return CaseScenario.model_validate(
+            {
+                "summary": (
+                    "A prototype cipher device vanished from a locked gallery during a brief power "
+                    "failure. Four people had access, but the security log and their timelines "
+                    "disagree."
+                ),
+                "details": {
+                    "crime": "Theft of a prototype cipher device",
+                    "location": "Blackwood Gallery archive room",
+                    "time_window": "9:05 PM-9:20 PM",
+                    "clues": [
+                        "The archive lock recorded a valid contractor badge at 9:12 PM.",
+                        "The hallway camera lost power, but the archive lock did not.",
+                        "Fresh graphite dust was found inside the device case.",
+                    ],
+                },
+                "suspects": suspects,
+                "criminal_id": "s2",
+            }
+        )
 
     def suspect_reply(
         self,
-        suspect: Dict[str, Any],
-        scenario: Dict[str, Any],
+        suspect: dict[str, Any],
+        scenario: dict[str, Any],
         question: str,
-        chat_history: List[Any],
+        chat_history: list[dict[str, str]],
     ) -> str:
-        """Generate a mock suspect reply."""
-        name = suspect.get("name", "Suspect")
-        alibi = suspect.get("alibi", "I don't recall")
-        return (
-            f"[Mock Response from {name}] "
-            f"I hear your question: '{question}'. "
-            f"{alibi} I don't recall anything suspicious. "
-            f"I was busy with my own tasks."
-        )
+        if chat_history:
+            return (
+                f"As I said earlier, {suspect['alibi']} About your question—{question}—"
+                "I have nothing more to add without seeing the access log."
+            )
+        return f"{suspect['alibi']} I did not enter the archive during the outage."
 
-    def analyze_suspicion(
+    def analyze_evidence(
         self,
-        scenario: Dict[str, Any],
-        suspect: Dict[str, Any],
+        scenario: dict[str, Any],
+        suspect: dict[str, Any],
         last_answer: str,
         last_question: str,
+        chat_history: list[dict[str, str]],
         current_score: float,
-    ) -> float:
-        """Analyze suspicion using simple heuristics."""
-        delta = 0.0
-        lower = (last_answer or "").lower()
-        # Crude signals
-        suspicious_markers = ["avoid", "confuse", "contrad", "maybe", "think", "unsure", "don't recall", "forgot"]
-        for w in suspicious_markers:
-            if w in lower:
-                delta += 0.3
-        if "alibi" in lower and ("changed" in lower or "different" in lower):
-            delta += 0.5
-        return min(max(delta, -0.2), 0.8)
-
-    def invoke(self, messages: List[Any]) -> Any:
-        """Mock LLM invocation."""
-        system = next((m for m in messages if isinstance(m, SystemMessage)), None)
-        human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
-        persona_hint = system.content if system else ""
-        question = human.content if human else ""
-        content = (
-            f"[Mock Response] {persona_hint[:120]}\n"
-            f"I hear your question: '{question}'. "
-            f"I don't recall anything suspicious. I was busy with my own tasks."
+    ) -> EvidenceAnalysis:
+        badge_clue = scenario["details"]["clues"][0]
+        is_contractor = suspect.get("occupation") == "Security contractor"
+        return EvidenceAnalysis(
+            suspicion_delta=0.6 if is_contractor else 0.1,
+            rationale=(
+                "The stated timeline conflicts with the contractor badge record."
+                if is_contractor
+                else "The answer is broadly consistent, but the timeline remains unverified."
+            ),
+            contradiction_detected=is_contractor,
+            contradiction=(
+                "The suspect says they left before 9:00 PM, but their badge was used at 9:12 PM."
+                if is_contractor
+                else None
+            ),
+            relevant_clue=badge_clue if is_contractor else None,
         )
-
-        class _Resp:
-            def __init__(self, c):
-                self.content = c
-
-        return _Resp(content)
 
 
 class LLMStrategyFactory:
-    """Factory class to create appropriate LLM strategy based on available API keys."""
-
-    @staticmethod
-    def _get_local_llm_url() -> str:
-        return os.environ.get("LOCAL_LLM_BASE_URL", "")
-
-    @staticmethod
-    def _get_qwen_key() -> str:
-        """Return Qwen/DashScope API key if present."""
-        return os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY") or ""
-
-    @staticmethod
-    def _get_openai_key() -> str:
-        """Return OpenAI API key if present."""
-        return os.environ.get("OPENAI_API_KEY") or ""
-
-    @staticmethod
-    def _get_google_key() -> str:
-        """Return Google API key if present."""
-        return os.environ.get("GOOGLE_API_KEY") or ""
+    """Select a provider using explicit environment configuration."""
 
     @staticmethod
     def create_strategy() -> BaseLLMStrategy:
-        """Create appropriate LLM strategy based on available API keys.
-        
-        Preference order:
-        1. Google Gemini if GOOGLE_API_KEY is set
-        2. Qwen if DASHSCOPE_API_KEY or QWEN_API_KEY is set
-        3. OpenAI if OPENAI_API_KEY is set
-        4. MockLLMStrategy otherwise
-        
-        Returns:
-            An instance of BaseLLMStrategy
-        """
-        # Prefer Google Gemini if key is available
-        google_key = LLMStrategyFactory._get_google_key()
-        if google_key and ChatGoogleGenerativeAI:
-            print("Using Google Gemini LLM Strategy")
-            return GoogleGeminiLLMStrategy(api_key=google_key)
+        local_url = os.environ.get("LOCAL_LLM_BASE_URL", "")
+        if local_url:
+            return DockerLLMStrategy(local_url, os.environ.get("LOCAL_LLM_MODEL", "phi3:mini"))
 
-        # Prefer Qwen if a Qwen/DashScope key is available
-        qwen_key = LLMStrategyFactory._get_qwen_key()
-        if qwen_key:
-            base_url = (
-                os.environ.get("QWEN_BASE_URL")
-                or os.environ.get("DASHSCOPE_BASE_URL")
-                or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        google_key = os.environ.get("GOOGLE_API_KEY", "")
+        if google_key and ChatGoogleGenerativeAI is not None:
+            return GoogleGeminiLLMStrategy(
+                google_key, os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash-lite")
             )
-            model = os.environ.get("QWEN_MODEL", "qwen-plus")
-            print(f"Using Qwen LLM Strategy (model: {model})")
-            try:
-                return QwenLLMStrategy(api_key=qwen_key, base_url=base_url, model=model)
-            except Exception as e:
-                print(f"Failed to initialize Qwen strategy: {e}")
-                # Fall through to next option
 
-        # Otherwise fall back to OpenAI if available
-        openai_key = LLMStrategyFactory._get_openai_key()
+        qwen_key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY", "")
+        if qwen_key:
+            return QwenLLMStrategy(
+                qwen_key,
+                os.environ.get("QWEN_BASE_URL") or os.environ.get("DASHSCOPE_BASE_URL"),
+                os.environ.get("QWEN_MODEL", "qwen-plus"),
+            )
+
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
         if openai_key:
-            print("Using OpenAI LLM Strategy")
-            try:
-                return OpenAILLMStrategy(api_key=openai_key)
-            except Exception as e:
-                print(f"Failed to initialize OpenAI strategy: {e}")
-                # Fall through to mock
+            return OpenAILLMStrategy(openai_key, os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
 
-        # No keys found, use mock
-        print("Using Mock LLM Strategy (no API keys found)")
         return MockLLMStrategy()
