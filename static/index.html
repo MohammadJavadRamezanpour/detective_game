@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🕵️ Detector Game</title>
+  <title>CaseGraph — AI Detective Game</title>
 
   <!-- Google Font for game feel -->
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
@@ -15,30 +15,56 @@
 </head>
 <body>
   <header>
-    <h1>🕵️‍♀️ Detector Game</h1>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">⌁</span>
+      <div>
+        <h1>CaseGraph</h1>
+        <p>Follow the evidence. Find the contradiction.</p>
+      </div>
+    </div>
     <button id="newGameBtn">
       <i class="fa-solid fa-rotate"></i> New Case
     </button>
   </header>
 
   <main>
-    <section id="scenario">
-      <h2>📂 Case Summary</h2>
+    <section id="scenario" class="case-file">
+      <div class="section-heading">
+        <h2>Case brief</h2>
+        <span id="turnCount" class="pill">0 interviews</span>
+      </div>
       <p id="summaryText" class="typewriter">
         Click "New Case" to begin…
       </p>
+      <div id="caseFacts" class="case-facts" hidden>
+        <div><span>Crime</span><strong id="crimeText"></strong></div>
+        <div><span>Location</span><strong id="locationText"></strong></div>
+        <div><span>Window</span><strong id="timeText"></strong></div>
+      </div>
+    </section>
+
+    <section id="evidence">
+      <h2>Evidence board</h2>
+      <h3>Known clues</h3>
+      <ul id="clueList" class="evidence-list empty-list">
+        <li>Start a case to inspect the evidence.</li>
+      </ul>
+      <h3>Contradictions</h3>
+      <ul id="contradictionList" class="evidence-list empty-list">
+        <li>No contradictions logged.</li>
+      </ul>
     </section>
 
     <section id="suspects">
-      <h2>🧍‍♂️ Suspects</h2>
+      <h2>Persons of interest</h2>
       <div id="suspectList" class="suspect-list"></div>
     </section>
 
     <section id="chat">
-      <h2>💬 Interrogation Room</h2>
+      <h2>Interrogation room</h2>
 
       <div class="controls">
-        <label for="suspectSelect">🎯 Target</label>
+        <label for="suspectSelect">Interview</label>
         <select id="suspectSelect"></select>
       </div>
 
@@ -46,10 +72,10 @@
 
       <div class="input-row">
         <input id="questionInput" type="text" placeholder="Ask something clever…" />
-        <button id="askBtn">
+        <button id="askBtn" aria-label="Ask question" title="Ask question">
           <i class="fa-solid fa-comment-dots"></i>
         </button>
-        <button id="accuseBtn" class="danger">
+        <button id="accuseBtn" class="danger" aria-label="Accuse selected suspect" title="Accuse selected suspect">
           <i class="fa-solid fa-gavel"></i>
         </button>
       </div>
@@ -59,7 +85,7 @@
   </main>
 
   <footer>
-    <small>🎮 Built with FastAPI + LangGraph</small>
+    <small>Checkpointed investigations powered by FastAPI + LangGraph</small>
   </footer>
 
   <script src="/static/app.js"></script>

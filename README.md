@@ -1,155 +1,157 @@
-# 🔍 Detector Game
+# CaseGraph
 
-An AI-powered detective game where you interrogate suspects to uncover the criminal. Built with **FastAPI**, **LangGraph**, and modern LLM providers.
+**A durable, stateful AI detective game built with LangGraph.** Generate a case, interview
+suspects with isolated memories, surface evidence-backed contradictions, and make a final
+accusation—all through a checkpointed workflow that survives application restarts.
 
+[![CI](https://github.com/MohammadJavadRamezanpour/detective_game/actions/workflows/ci.yml/badge.svg)](https://github.com/MohammadJavadRamezanpour/detective_game/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
+![LangGraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)
 
-![Game Screenshot](/static/images/game.png)
+CaseGraph is designed as a compact demonstration of production-minded agent orchestration:
+graph-native persistence, explicit state, conditional routing, structured model outputs,
+provider-independent LLM operations, and deterministic offline tests.
 
-![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)
-![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-purple.svg)
+## Why LangGraph?
 
-## 🎮 Game Overview
+An investigation is a long-running workflow, not a single prompt. Each player action enters the
+same persisted graph thread. LangGraph routes the action, checkpoints every graph step, and merges
+new conversation messages into the case state.
 
-In Detector Game, you play as a detective investigating a crime scene. The AI generates a unique mystery scenario with multiple suspects, each with their own personality, alibi, and secrets. Your job is to:
+```mermaid
+flowchart LR
+    START((Player action)) --> R{Route action}
+    R -->|new_game| C[Create + validate case]
+    R -->|question| A[Answer as suspect]
+    A --> E[Analyze evidence]
+    R -->|accuse| V[Check accusation]
+    C --> END((Checkpoint))
+    E --> END
+    V --> END
+```
 
-1. **Analyze the case** - Read through the crime summary and clues
-2. **Interrogate suspects** - Ask questions to uncover contradictions and secrets
-3. **Track suspicion levels** - Watch as the AI analyzes each suspect's responses
-4. **Make your accusation** - When you're confident, accuse the suspect you believe is guilty
+The workflow demonstrates:
 
-## ✨ Features
+- **Durable execution:** SQLite checkpoints are keyed by `game_id` as LangGraph `thread_id`.
+- **Reducer-backed state:** `add_messages` safely accumulates LangChain messages across turns.
+- **Conditional routing:** new cases, interviews, and accusations take distinct graph paths.
+- **Structured output:** Pydantic validates generated cases and evidence assessments.
+- **Scoped memory:** every suspect gets an independent history, preventing cross-character leakage.
+- **Grounded analysis:** contradiction detection compares answers with the canonical case, alibi,
+  clues, and that suspect's earlier claims.
 
-- 🎲 **Dynamic Scenario Generation** - Every game creates a unique crime story with different suspects
-- 🤖 **Multiple LLM Support** - Choose between OpenAI GPT, Google Gemini, or Qwen models
-- 💬 **Realistic Interrogations** - Suspects respond based on their personality and guilt level
-- 📊 **Suspicion Tracking** - AI analyzes responses and updates suspicion scores in real-time
-- 🌐 **Simple Web UI** - Clean HTML/CSS/JS frontend for easy gameplay
+## Product experience
 
-## 🚀 Getting Started
+The interface presents three connected views:
 
-### Prerequisites
+1. A case brief with the crime, location, and time window.
+2. An evidence board containing concrete clues and contradictions discovered during interviews.
+3. An interrogation room with suspect-specific memory and explainable suspicion updates.
 
-- Python 3.9+
-- An API key from one of the supported LLM providers:
-  - OpenAI (`OPENAI_API_KEY`)
-  - Google Gemini (`GOOGLE_API_KEY`)
-  - Qwen/DashScope (`QWEN_API_KEY`)
+No API key is required. With no provider configured, CaseGraph starts in deterministic offline mode
+with a complete playable case—useful for evaluation, development, and CI.
 
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/MohammadJavadRamezanpour/detective_game.git detectivegame
-   cd detectivegame
-   ```
-
-2. **Create a virtual environment**
-   ```bash
-   python -m venv env
-   source env/bin/activate  # On Windows: env\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure environment variables**
-   ```bash
-   cp .env.sample .env
-   # Edit .env and add your API key(s)
-   ```
-
-### Running the Game
-
-Start the development server:
+## Quick start
 
 ```bash
+git clone https://github.com/MohammadJavadRamezanpour/detective_game.git
+cd detective_game
+python3 -m venv env
+source env/bin/activate
+pip install -r requirements.txt
+cp .env.sample .env
 uvicorn backend.api:app --reload
 ```
 
-Then open your browser and navigate to: **http://localhost:8000**
+Open [http://localhost:8000](http://localhost:8000). Leave all provider keys blank to use the
+offline demo.
 
-## 🏗️ Project Structure
+## Provider configuration
 
+CaseGraph selects the first explicitly configured provider in this order: local model, Google,
+Qwen, OpenAI, then offline mode.
+
+| Provider | Default model | Configuration |
+|---|---|---|
+| Ollama/vLLM-compatible | `phi3:mini` | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL` |
+| Google Gemini | `gemini-2.5-flash-lite` | `GOOGLE_API_KEY`, `GOOGLE_MODEL` |
+| Qwen/DashScope | `qwen-plus` | `QWEN_API_KEY`, `QWEN_MODEL` |
+| OpenAI | `gpt-4o-mini` | `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| Offline demo | deterministic | no keys required |
+
+Each hosted-provider request has a timeout and bounded retries. Provider responses still pass
+through the same Pydantic domain validation before they enter graph state.
+
+## State and persistence
+
+The graph stores the complete investigation state, including:
+
+```text
+case facts + hidden solution
+global message timeline
+per-suspect conversation histories
+suspicion scores + structured analysis log
+discovered contradictions
+turn count + final verdict
 ```
-src/
-├── backend/
-│   ├── api.py           # FastAPI endpoints
-│   ├── graph.py         # LangGraph game state machine
-│   └── llm_strategy.py  # LLM providers (OpenAI, Gemini, Qwen)
-├── static/
-│   ├── index.html       # Web UI
-│   ├── style.css        # Styling
-│   └── app.js           # Frontend logic
-├── test/                # Test files
-├── requirements.txt     # Python dependencies
-└── .env.sample          # Environment template
-```
 
-## 🔧 API Endpoints
+Local checkpoints are written to `.data/casegraph.sqlite` by default. Override the path with
+`CASEGRAPH_DB_PATH`. SQLite is intentionally used for a zero-infrastructure demo; a multi-instance
+deployment should replace it with a shared LangGraph checkpointer such as PostgreSQL.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Serve the web UI |
-| `/api/new_game` | POST | Start a new game with generated scenario |
-| `/api/ask` | POST | Ask a question to a suspect |
-| `/api/accuse` | POST | Accuse a suspect as the criminal |
+## API
 
-### Example: Start a New Game
+| Method | Endpoint | Graph action |
+|---|---|---|
+| `POST` | `/api/new_game` | Generate and validate a case in a new thread |
+| `POST` | `/api/ask` | Interview a suspect, then analyze the answer |
+| `POST` | `/api/accuse` | Route to verdict and reveal the canonical solution |
+| `GET` | `/api/health` | Lightweight service health check |
+
+The public API filters criminal roles and the hidden solution until the game ends. Request models
+bound suspect counts, identifiers, and question length.
+
+## Quality checks
 
 ```bash
-curl -X POST http://localhost:8000/api/new_game \
-  -H "Content-Type: application/json" \
-  -d '{"num_suspects": 4}'
+pip install -r requirements-dev.txt
+ruff check .
+python -m pytest
 ```
 
-### Example: Ask a Question
+The test suite covers graph routing, reducer-backed message accumulation, suspect memory isolation,
+schema failures, API validation, hidden-answer boundaries, win conditions, and checkpoint recovery
+after a new `GraphManager` opens the same SQLite database. GitHub Actions runs lint and tests for
+every pull request.
 
-```bash
-curl -X POST http://localhost:8000/api/ask \
-  -H "Content-Type: application/json" \
-  -d '{
-    "game_id": "your-game-id",
-    "suspect_id": "suspect-1",
-    "question": "Where were you on the night of the murder?"
-  }'
+## Project layout
+
+```text
+backend/
+├── api.py           # Validated HTTP boundary and public-state filtering
+├── graph.py         # LangGraph state, nodes, routing, and checkpoint lifecycle
+├── llm_strategy.py  # Provider adapters, prompts, and offline strategy
+└── models.py        # Structured case and evidence schemas
+static/
+├── index.html       # Case board and interrogation interface
+├── app.js           # Safe DOM rendering and API interactions
+└── style.css        # Responsive noir-inspired UI
+test/
+├── test_api.py
+├── test_graph.py
+├── test_models.py
+└── test_strategy.py
 ```
 
-## 🤖 Supported LLM Providers
+## Design decisions and current limits
 
-The game uses a **Strategy Pattern** to support multiple LLM providers:
+- Suspicion is a player aid, not a guilt oracle: analysis is instructed to use concrete facts rather
+  than tone, and the UI displays its rationale.
+- SQLite keeps local setup simple and durable but is not intended for horizontally scaled servers.
+- The vanilla frontend keeps the orchestration code easy to inspect; production deployment would
+  add authentication, rate limiting, and server-side request quotas.
+- Generated mysteries are schema-valid and internally constrained, but model-generated narrative
+  consistency remains an evaluation area rather than a solved problem.
 
-| Provider | Model | Environment Variable |
-|----------|-------|---------------------|
-| OpenAI | gpt-4o-mini | `OPENAI_API_KEY` |
-| Google | gemini-2.0-flash | `GOOGLE_API_KEY` |
-| Qwen | qwen-plus | `QWEN_API_KEY` |
-
-The system automatically selects an available provider based on which API key is configured.
-
-## 🛠️ Technology Stack
-
-- **Backend**: FastAPI, Python
-- **AI Framework**: LangGraph, LangChain
-- **LLM Providers**: OpenAI, Google Gemini, Qwen
-- **Frontend**: Vanilla HTML/CSS/JavaScript
-
-## 📝 License
-
-This project is open source and available under the [MIT License](LICENSE).
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-**Built with ❤️ using FastAPI + LangGraph**
+Licensed under the [MIT License](LICENSE).

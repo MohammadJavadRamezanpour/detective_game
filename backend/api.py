@@ -1,131 +1,156 @@
+"""FastAPI boundary for the CaseGraph workflow."""
+
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from .graph import GraphManager, SessionStore
+from .graph import GameState, GraphManager
 
-# Load environment variables (e.g., DASHSCOPE_API_KEY) from .env if present
 load_dotenv()
-# Also load from qwen.env if present (since .env is a virtualenv directory in this repo)
-try:
-    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / "qwen.env", override=True)
-except Exception:
-    pass
 
-
-app = FastAPI(title="Detector Game")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Static files (frontend)
 ROOT = Path(__file__).resolve().parent.parent
-static_dir = ROOT / "static"
-# Mount static assets under /static so API routes remain accessible
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
-# Serve the SPA index at root
-@app.get("/")
-def index():
-    return FileResponse(static_dir / "index.html")
-
-
-graph_manager = GraphManager()
-sessions = SessionStore()
+STATIC_DIR = ROOT / "static"
 
 
 class NewGameRequest(BaseModel):
-    num_suspects: Optional[int] = 4
+    num_suspects: int = Field(default=4, ge=3, le=6)
 
 
 class AskRequest(BaseModel):
-    game_id: str
-    suspect_id: str
-    question: str
+    game_id: str = Field(min_length=1, max_length=80)
+    suspect_id: str = Field(pattern=r"^s\d+$")
+    question: str = Field(min_length=2, max_length=500)
 
 
 class AccuseRequest(BaseModel):
-    game_id: str
-    suspect_id: str
+    game_id: str = Field(min_length=1, max_length=80)
+    suspect_id: str = Field(pattern=r"^s\d+$")
 
 
-@app.post("/api/new_game")
-def new_game(req: NewGameRequest):
-    payload = graph_manager.new_game(num_suspects=req.num_suspects or 4)
-    game_id = sessions.create(payload)
-    state = payload["state"]
-    
-    # Return public-facing info
+def _messages(state: GameState) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": getattr(message, "type", ""),
+            "name": getattr(message, "name", None),
+            "content": getattr(message, "content", ""),
+        }
+        for message in state.get("messages", [])
+    ]
+
+
+def _public_case(game_id: str, state: GameState) -> dict[str, Any]:
     return {
         "game_id": game_id,
         "summary": state["summary"],
         "details": state["details"],
         "suspects": [
-            {"id": s["id"], "name": s["name"], "occupation": s["occupation"]}
-            for s in state["suspects"]
+            {"id": item["id"], "name": item["name"], "occupation": item["occupation"]}
+            for item in state["suspects"]
         ],
         "suspicion": state["suspicion"],
+        "contradictions": state["contradictions"],
+        "turn_count": state["turn_count"],
     }
 
 
-@app.post("/api/ask")
-def ask(req: AskRequest):
-    if req.game_id not in sessions.sessions:
-        raise HTTPException(status_code=404, detail="Game not found")
-    
-    state = sessions.get_state(req.game_id)
-    if state.get("game_over"):
-        raise HTTPException(status_code=400, detail="Game is over")
-    
-    new_state = graph_manager.ask(state, req.suspect_id, req.question)
-    sessions.set_state(req.game_id, new_state)
-    
-    # Find the last AI message content for convenience
-    last_ai = next((m for m in reversed(new_state["messages"]) if getattr(m, "type", "ai") == "ai"), None)
-    answer = getattr(last_ai, "content", "") if last_ai else ""
-    
-    return {
-        "answer": answer,
-        "suspicion": new_state["suspicion"],
-        "game_over": new_state["game_over"],
-        "result": new_state["result"],
-        "messages": [
-            {"role": getattr(m, "type", ""), "name": getattr(m, "name", None), "content": getattr(m, "content", "")}
-            for m in new_state["messages"]
-        ],
-    }
+def create_app(manager: GraphManager | None = None) -> FastAPI:
+    owns_manager = manager is None
+    graph_manager = manager or GraphManager()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        if owns_manager:
+            graph_manager.close()
+
+    application = FastAPI(
+        title="CaseGraph",
+        version="1.0.0",
+        description="A durable LangGraph-powered detective game.",
+        lifespan=lifespan,
+    )
+    application.state.graph_manager = graph_manager
+
+    origins = [
+        item.strip()
+        for item in os.environ.get(
+            "CASEGRAPH_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
+        ).split(",")
+        if item.strip()
+    ]
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
+    application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @application.get("/")
+    def index():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @application.get("/api/health")
+    def health():
+        return {"status": "ok", "workflow": "casegraph"}
+
+    @application.post("/api/new_game")
+    def new_game(request: NewGameRequest):
+        game_id, state = graph_manager.new_game(request.num_suspects)
+        return _public_case(game_id, state)
+
+    @application.post("/api/ask")
+    def ask(request: AskRequest):
+        try:
+            state = graph_manager.ask(request.game_id, request.suspect_id, request.question)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Game not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail="Suspect not found") from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error).capitalize()) from error
+
+        return {
+            "answer": state.get("last_answer", ""),
+            "analysis": state.get("last_analysis"),
+            "suspicion": state["suspicion"],
+            "contradictions": state["contradictions"],
+            "turn_count": state["turn_count"],
+            "game_over": state["game_over"],
+            "result": state["result"],
+            "messages": _messages(state),
+        }
+
+    @application.post("/api/accuse")
+    def accuse(request: AccuseRequest):
+        try:
+            state = graph_manager.accuse(request.game_id, request.suspect_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Game not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail="Suspect not found") from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error).capitalize()) from error
+
+        return {
+            "game_over": state["game_over"],
+            "result": state["result"],
+            "reveal": state["reveal"],
+            "messages": _messages(state),
+        }
+
+    return application
 
 
-@app.post("/api/accuse")
-def accuse(req: AccuseRequest):
-    if req.game_id not in sessions.sessions:
-        raise HTTPException(status_code=404, detail="Game not found")
-
-    state = sessions.get_state(req.game_id)
-    if state.get("game_over"):
-        raise HTTPException(status_code=400, detail="Game is over")
-
-    new_state = graph_manager.accuse(state, req.suspect_id)
-    sessions.set_state(req.game_id, new_state)
-    
-    return {
-        "game_over": new_state["game_over"],
-        "result": new_state["result"],
-        "messages": [
-            {"role": getattr(m, "type", ""), "name": getattr(m, "name", None), "content": getattr(m, "content", "")}
-            for m in new_state["messages"]
-        ],
-    }
+app = create_app()
